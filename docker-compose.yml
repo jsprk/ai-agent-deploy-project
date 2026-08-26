@@ -1,0 +1,35 @@
+name: user16-receipt
+services:     # 도커 컨테이너를 관리하는 스크립트
+  backend:
+    build: 
+      context: .
+      dockerfile: Dockerfile.backend
+    image: user16-receipt-backend:latest
+    container_name: user16-backend
+    ports:
+      - "${BACKEND_PORT}:8000"  # 외부 8001번 포트를 컨테이너 내부 8000번 포트로 연결
+    volumes:
+      - .:/app       # 개발 편의를 위한 Bind Mount 설정[cite: 1]
+    environment:
+      # 도커 컨테이너에 특정 MIG 조각만 들여보내도록 제한
+      - NVIDIA_VISIBLE_DEVICES=MIG-c111a1a4-96f3-5e31-aa6f-c28e2ded0fa7
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  frontend:
+    build: 
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: user16-receipt-frontend:latest
+    container_name: user16-frontend
+    ports:
+      - "${FONTEND_PORT}::8501"  # 외부 8501번 포트를 컨테이너 내부 8501번 포트로 연결[cite: 1]
+    volumes:
+      - .:/app       # 개발 편의를 위한 Bind Mount 설정[cite: 1]
+    environment:
+      # 컨테이너 간 통신 시 DNS 이름처럼 서비스 이름(backend)을 활용[cite: 1]
+      - API_URL=http://backend:8000
