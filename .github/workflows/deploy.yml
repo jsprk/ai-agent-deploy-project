@@ -9,16 +9,20 @@ on:
 
 permissions:
   contents: read
-
+  
 jobs:
 
   # =====================================================
-  # CI: GitHub-hosted Runner
+  # CI
+  # GitHub-hosted Runner에서 코드 검사
   # =====================================================
+
   test:
+
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -26,11 +30,9 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.10"
-          cache: pip
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Syntax check
@@ -39,134 +41,48 @@ jobs:
 
 
   # =====================================================
-  # CD: Windows Self-hosted Runner
+  # CD
+  # 학생 PC Self-hosted Runner에서 H200 배포
   # =====================================================
+
   deploy:
+
     needs: test
 
     runs-on:
       - self-hosted
       - Windows
       - X64
-
+      -
     timeout-minutes: 20
 
     steps:
 
-      # -------------------------------------------------
-      # 1. 소스 Checkout
-      # -------------------------------------------------
-      - name: Checkout
-        uses: actions/checkout@v7
+      # ----------------------------------------------
+      # H200 접속 확인
+      # ----------------------------------------------
 
-
-      # -------------------------------------------------
-      # 2. Runner 환경 확인
-      # -------------------------------------------------
-      - name: Check Runner environment
-        shell: cmd
-        run: |
-          echo Runner Name : %RUNNER_NAME%
-          echo Runner OS   : %RUNNER_OS%
-          echo Windows User: %USERNAME%
-          echo User Profile: %USERPROFILE%
-
-          ssh -V
-
-          if not exist "%USERPROFILE%\.ssh\config" (
-            echo ERROR: SSH config not found
-            echo Expected: %USERPROFILE%\.ssh\config
-            exit /b 1
-          )
-
-          echo SSH config found
-
-
-      # -------------------------------------------------
-      # 3. H200 연결 확인
-      # -------------------------------------------------
       - name: Check H200 connection
-        shell: cmd
+        shell: powershell
+
         run: |
           ssh -o BatchMode=yes -o ConnectTimeout=10 h200 "echo SSH_OK && whoami && hostname"
 
-          if errorlevel 1 (
-            echo ERROR: H200 SSH connection failed
-            exit /b 1
-          )
 
+      # ----------------------------------------------
+      # H200 배포
+      # ----------------------------------------------
 
-      # -------------------------------------------------
-      # 4. 배포 압축 파일 생성
-      # -------------------------------------------------
-      - name: Create deployment archive
-        shell: cmd
-        run: |
-          if exist deploy.tar.gz del /F /Q deploy.tar.gz
-
-          tar.exe --exclude=.git --exclude=.github --exclude=logs --exclude=deploy.tar.gz -czf deploy.tar.gz .
-
-          if errorlevel 1 (
-            echo ERROR: Failed to create deploy.tar.gz
-            exit /b 1
-          )
-
-          if not exist deploy.tar.gz (
-            echo ERROR: deploy.tar.gz was not created
-            exit /b 1
-          )
-
-          dir deploy.tar.gz
-
-
-      # -------------------------------------------------
-      # 5. H200으로 파일 전송
-      # -------------------------------------------------
-      - name: Upload archive to H200
-        shell: cmd
-        run: |
-          scp -o BatchMode=yes -o ConnectTimeout=10 deploy.tar.gz h200:~/deploy.tar.gz
-
-          if errorlevel 1 (
-            echo ERROR: Upload to H200 failed
-            exit /b 1
-          )
-
-
-      # -------------------------------------------------
-      # 6. H200 Docker 배포
-      # -------------------------------------------------
       - name: Deploy Docker containers
-        shell: cmd
+        shell: powershell
         run: |
-          ssh -o BatchMode=yes h200 "set -e; rm -rf ~/llm/ai-agent-deploy-project; mkdir -p ~/llm/ai-agent-deploy-project; tar -xzf ~/deploy.tar.gz -C ~/llm/ai-agent-deploy-project; cp ~/.h200-deploy/.env ~/llm/ai-agent-deploy-project/.env; rm -f ~/deploy.tar.gz; cd ~/llm/ai-agent-deploy-project; docker compose up -d --build"
+          ssh -o BatchMode=yes h200 "rm -rf ~/llm/ai-agent-deploy-project && mkdir -p ~/llm/ai-agent-deploy-project && tar -xf ~/deploy.tar -C ~/llm/ai-agent-deploy-project && cp ~/.h200-deploy/.env ~/llm/ai-agent-deploy-project/.env && rm ~/deploy.tar && cd ~/llm/ai-agent-deploy-project && docker compose up -d --build"
 
-          if errorlevel 1 (
-            echo ERROR: Docker deployment failed
-            exit /b 1
-          )
-
-
-      # -------------------------------------------------
-      # 7. 컨테이너 상태 확인
-      # -------------------------------------------------
+      # ---------------------------------------------------
+      # 6. 실행 결과 확인
+      # ---------------------------------------------------
       - name: Check containers
-        shell: cmd
+        shell: powershell
+
         run: |
           ssh -o BatchMode=yes h200 "cd ~/llm/ai-agent-deploy-project && docker compose ps"
-
-          if errorlevel 1 (
-            echo ERROR: Container status check failed
-            exit /b 1
-          )
-
-
-      # -------------------------------------------------
-      # 8. Runner 임시 파일 정리
-      # -------------------------------------------------
-      - name: Cleanup Runner archive
-        if: always()
-        shell: cmd
-        run: |
-          if exist deploy.tar.gz del /F /Q deploy.tar.gz
-          echo Runner cleanup completed
