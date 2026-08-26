@@ -4,19 +4,25 @@ on:
   push:
     branches:
       - main
+
   workflow_dispatch:
 
 permissions:
   contents: read
-
+  
 jobs:
+
   # =====================================================
-  # CI: GitHub-hosted Runner에서 코드 검사
+  # CI
+  # GitHub-hosted Runner에서 코드 검사
   # =====================================================
+
   test:
+
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -24,21 +30,23 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.10"
-          cache: pip
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Syntax check
         run: |
           python -m compileall .
 
+
   # =====================================================
-  # CD: Windows Self-hosted Runner에서 H200 서버로 배포
+  # CD
+  # 학생 PC Self-hosted Runner에서 H200 배포
   # =====================================================
+
   deploy:
+
     needs: test
 
     runs-on:
@@ -49,95 +57,32 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # Self-hosted Runner 작업 디렉터리에 소스를 내려받는다.
-      - name: Checkout
-        uses: actions/checkout@v7
 
-      # Runner 서비스 계정과 SSH 설정을 확인한다.
-      - name: Check Runner environment
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
-        run: |
-          Write-Host "Runner Name : $env:RUNNER_NAME"
-          Write-Host "Runner OS   : $env:RUNNER_OS"
-          Write-Host "Windows User: $env:USERNAME"
-          Write-Host "User Profile: $env:USERPROFILE"
-          ssh -V
+      # ----------------------------------------------
+      # H200 접속 확인
+      # ----------------------------------------------
 
-          $sshConfig = Join-Path $env:USERPROFILE ".ssh\config"
-          if (Test-Path $sshConfig) {
-              Write-Host "SSH config found: $sshConfig"
-          }
-          else {
-              throw "SSH config not found: $sshConfig"
-          }
-
-      # H200 별칭, 인증키 및 네트워크 연결을 확인한다.
       - name: Check H200 connection
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
+        shell: powershell
+
         run: |
           ssh -o BatchMode=yes -o ConnectTimeout=10 h200 "echo SSH_OK && whoami && hostname"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "H200 SSH connection failed. exit_code=$LASTEXITCODE"
-          }
 
-      # GitHub에서 받은 현재 소스를 하나의 배포 파일로 만든다.
-      - name: Create deployment archive
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
-        run: |
-          $archive = "deploy.tar.gz"
+      # ----------------------------------------------
+      # H200 배포
+      # ----------------------------------------------
 
-          if (Test-Path $archive) {
-              Remove-Item $archive -Force
-          }
-
-          tar.exe --exclude=.git --exclude=.github --exclude=logs --exclude=deploy.tar.gz -czf $archive .
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Deployment archive creation failed. exit_code=$LASTEXITCODE"
-          }
-
-          if (-not (Test-Path $archive)) {
-              throw "Deployment archive was not created: $archive"
-          }
-
-          Get-Item $archive | Format-List Name, Length, LastWriteTime
-
-      # 생성한 배포 파일을 H200 사용자 홈으로 전송한다.
-      - name: Upload archive to H200
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
-        run: |
-          scp -o BatchMode=yes -o ConnectTimeout=10 deploy.tar.gz h200:~/deploy.tar.gz
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Upload to H200 failed. exit_code=$LASTEXITCODE"
-          }
-
-      # H200에서 기존 소스를 교체하고 Docker 이미지를 다시 빌드한다.
       - name: Deploy Docker containers
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
+        shell: powershell
         run: |
-          ssh -o BatchMode=yes h200 "set -e; rm -rf ~/llm/ai-agent-deploy-project; mkdir -p ~/llm/ai-agent-deploy-project; tar -xzf ~/deploy.tar.gz -C ~/llm/ai-agent-deploy-project; cp ~/.h200-deploy/.env ~/llm/ai-agent-deploy-project/.env; rm -f ~/deploy.tar.gz; cd ~/llm/ai-agent-deploy-project; docker compose up -d --build"
+          ssh -o BatchMode=yes h200 "rm -rf ~/llm/ai-agent-deploy-project && mkdir -p ~/llm/ai-agent-deploy-project && tar -xf ~/deploy.tar -C ~/llm/ai-agent-deploy-project && cp ~/.h200-deploy/.env ~/llm/ai-agent-deploy-project/.env && rm ~/deploy.tar && cd ~/llm/ai-agent-deploy-project && docker compose up -d --build"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "Docker deployment failed. exit_code=$LASTEXITCODE"
-          }
-
-      # 배포 완료 후 컨테이너 상태를 출력한다.
+      # ---------------------------------------------------
+      # 6. 실행 결과 확인
+      # ---------------------------------------------------
       - name: Check containers
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
+        shell: powershell
+
         run: |
           ssh -o BatchMode=yes h200 "cd ~/llm/ai-agent-deploy-project && docker compose ps"
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Container status check failed. exit_code=$LASTEXITCODE"
-          }
-
-      # Runner에 남은 임시 압축 파일을 항상 삭제한다.
-      - name: Cleanup Runner archive
-        if: always()
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -File {0}
-        run: |
-          if (Test-Path "deploy.tar.gz") {
-              Remove-Item "deploy.tar.gz" -Force
-          }
