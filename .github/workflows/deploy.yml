@@ -13,8 +13,7 @@ permissions:
 jobs:
 
   # =====================================================
-  # CI
-  # GitHub-hosted Runner에서 코드 검사
+  # CI: GitHub-hosted Runner
   # =====================================================
   test:
     runs-on: ubuntu-latest
@@ -40,8 +39,7 @@ jobs:
 
 
   # =====================================================
-  # CD
-  # 학생 PC Self-hosted Runner에서 H200 배포
+  # CD: Windows Self-hosted Runner
   # =====================================================
   deploy:
     needs: test
@@ -56,7 +54,7 @@ jobs:
     steps:
 
       # -------------------------------------------------
-      # 1. Self-hosted Runner에 소스 다운로드
+      # 1. 소스 Checkout
       # -------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v7
@@ -66,125 +64,109 @@ jobs:
       # 2. Runner 환경 확인
       # -------------------------------------------------
       - name: Check Runner environment
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
-          Write-Host "Runner Name  : $env:RUNNER_NAME"
-          Write-Host "Runner OS    : $env:RUNNER_OS"
-          Write-Host "Windows User : $env:USERNAME"
-          Write-Host "User Profile : $env:USERPROFILE"
+          echo Runner Name : %RUNNER_NAME%
+          echo Runner OS   : %RUNNER_OS%
+          echo Windows User: %USERNAME%
+          echo User Profile: %USERPROFILE%
 
           ssh -V
 
-          $sshConfig = Join-Path $env:USERPROFILE ".ssh\config"
+          if not exist "%USERPROFILE%\.ssh\config" (
+            echo ERROR: SSH config not found
+            echo Expected: %USERPROFILE%\.ssh\config
+            exit /b 1
+          )
 
-          if (Test-Path $sshConfig) {
-              Write-Host "SSH config found: $sshConfig"
-          }
-          else {
-              throw "SSH config not found: $sshConfig"
-          }
+          echo SSH config found
 
 
       # -------------------------------------------------
-      # 3. H200 SSH 접속 확인
+      # 3. H200 연결 확인
       # -------------------------------------------------
       - name: Check H200 connection
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
-          ssh `
-            -o BatchMode=yes `
-            -o ConnectTimeout=10 `
-            h200 `
-            "echo SSH_OK && whoami && hostname"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 h200 "echo SSH_OK && whoami && hostname"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "H200 SSH connection failed. exit_code=$LASTEXITCODE"
-          }
+          if errorlevel 1 (
+            echo ERROR: H200 SSH connection failed
+            exit /b 1
+          )
 
 
       # -------------------------------------------------
-      # 4. 배포 파일 생성
+      # 4. 배포 압축 파일 생성
       # -------------------------------------------------
       - name: Create deployment archive
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
-          $archive = "deploy.tar.gz"
+          if exist deploy.tar.gz del /F /Q deploy.tar.gz
 
-          if (Test-Path $archive) {
-              Remove-Item $archive -Force
-          }
+          tar.exe --exclude=.git --exclude=.github --exclude=logs --exclude=deploy.tar.gz -czf deploy.tar.gz .
 
-          tar.exe `
-            --exclude=.git `
-            --exclude=.github `
-            --exclude=logs `
-            --exclude=deploy.tar.gz `
-            -czf $archive .
+          if errorlevel 1 (
+            echo ERROR: Failed to create deploy.tar.gz
+            exit /b 1
+          )
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "Deployment archive creation failed. exit_code=$LASTEXITCODE"
-          }
+          if not exist deploy.tar.gz (
+            echo ERROR: deploy.tar.gz was not created
+            exit /b 1
+          )
 
-          if (-not (Test-Path $archive)) {
-              throw "Deployment archive was not created: $archive"
-          }
-
-          Get-Item $archive |
-              Format-List Name, Length, LastWriteTime
+          dir deploy.tar.gz
 
 
       # -------------------------------------------------
-      # 5. 배포 파일을 H200 서버로 전송
+      # 5. H200으로 파일 전송
       # -------------------------------------------------
       - name: Upload archive to H200
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
-          scp `
-            -o BatchMode=yes `
-            -o ConnectTimeout=10 `
-            deploy.tar.gz `
-            h200:~/deploy.tar.gz
+          scp -o BatchMode=yes -o ConnectTimeout=10 deploy.tar.gz h200:~/deploy.tar.gz
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "Upload to H200 failed. exit_code=$LASTEXITCODE"
-          }
+          if errorlevel 1 (
+            echo ERROR: Upload to H200 failed
+            exit /b 1
+          )
 
 
       # -------------------------------------------------
       # 6. H200 Docker 배포
       # -------------------------------------------------
       - name: Deploy Docker containers
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
           ssh -o BatchMode=yes h200 "set -e; rm -rf ~/llm/ai-agent-deploy-project; mkdir -p ~/llm/ai-agent-deploy-project; tar -xzf ~/deploy.tar.gz -C ~/llm/ai-agent-deploy-project; cp ~/.h200-deploy/.env ~/llm/ai-agent-deploy-project/.env; rm -f ~/deploy.tar.gz; cd ~/llm/ai-agent-deploy-project; docker compose up -d --build"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "Docker deployment failed. exit_code=$LASTEXITCODE"
-          }
+          if errorlevel 1 (
+            echo ERROR: Docker deployment failed
+            exit /b 1
+          )
 
 
       # -------------------------------------------------
-      # 7. 컨테이너 실행 결과 확인
+      # 7. 컨테이너 상태 확인
       # -------------------------------------------------
       - name: Check containers
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
           ssh -o BatchMode=yes h200 "cd ~/llm/ai-agent-deploy-project && docker compose ps"
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "Container status check failed. exit_code=$LASTEXITCODE"
-          }
+          if errorlevel 1 (
+            echo ERROR: Container status check failed
+            exit /b 1
+          )
 
 
       # -------------------------------------------------
-      # 8. Runner 임시 압축 파일 삭제
-      # 성공·실패 여부와 상관없이 실행
+      # 8. Runner 임시 파일 정리
       # -------------------------------------------------
       - name: Cleanup Runner archive
         if: always()
-        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        shell: cmd
         run: |
-          if (Test-Path "deploy.tar.gz") {
-              Remove-Item "deploy.tar.gz" -Force
-              Write-Host "deploy.tar.gz removed"
-          }
+          if exist deploy.tar.gz del /F /Q deploy.tar.gz
+          echo Runner cleanup completed
